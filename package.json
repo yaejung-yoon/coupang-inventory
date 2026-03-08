@@ -1,22 +1,25 @@
 {
   "name": "coupang-inventory-manager",
-  "version": "1.0.0",
-  "description": "쿠팡 로켓그로스 재고 관리 시스템",
+  "version": "2.0.0",
+  "description": "쿠팡 로켓그로스 재고 관리 시스템 (Railway)",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "start": "node server/index.js",
     "preview": "vite preview"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "recharts": "^2.10.3"
   },
   "devDependencies": {
-    "@types/react": "^18.2.43",
-    "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
     "vite": "^5.0.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
