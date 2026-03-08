@@ -1,16 +1,19 @@
 // ============================================================
-// 쿠팡 API 프록시 함수 - 서명 최종 수정버전
-//
-// 쿠팡 서명 공식:
-//   message = datetime + METHOD + /path + ?key=value&key2=value2
-//   ※ 서명용 쿼리스트링: 인코딩 없이 raw 값 그대로
-//   ※ URL용 쿼리스트링: 값에 encodeURIComponent 적용
+// 쿠팡 API 프록시 함수 - 공식문서 기준 완전 수정버전
+// 수정사항:
+//   1. 재고 필드명: quantity → amountInStock (공식문서 확인)
+//   2. 주문 조회: v4 → v5 (최신 버전)
+//   3. 상품목록 → 개별조회로 vendorItemId 확실하게 추출
 // ============================================================
 
 import crypto from 'crypto';
 
 const BASE_URL = 'https://api-gateway.coupang.com';
 
+// ─────────────────────────────────────────────
+// 서명 생성
+// 서명용: raw 값 그대로 / URL용: encodeURIComponent
+// ─────────────────────────────────────────────
 function generateAuth(method, path, rawQuery, accessKey, secretKey) {
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
@@ -22,10 +25,8 @@ function generateAuth(method, path, rawQuery, accessKey, secretKey) {
     pad(now.getUTCMinutes()) +
     pad(now.getUTCSeconds()) + 'Z';
 
-  // ✅ 서명: 인코딩 없는 raw 쿼리스트링
   const message = datetime + method + path + (rawQuery ? '?' + rawQuery : '');
-
-  console.log('[서명메시지]', message);
+  console.log('[서명]', message);
 
   const signature = crypto
     .createHmac('sha256', secretKey)
@@ -40,10 +41,7 @@ async function callAPI(method, path, params, accessKey, secretKey) {
     ? Object.entries(params).filter(([, v]) => v != null && v !== '')
     : [];
 
-  // 서명용: 인코딩 없이 원본값 그대로
   const rawQuery = entries.map(([k, v]) => `${k}=${v}`).join('&');
-
-  // URL용: 값만 encodeURIComponent
   const urlQuery = entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
 
   const authorization = generateAuth(method, path, rawQuery, accessKey, secretKey);
@@ -70,45 +68,121 @@ function formatDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T00:00:00`;
 }
 
-async function getProducts(vendorId, ak, sk) {
-  const path = `/v2/providers/seller_api/apis/api/v1/vendor/${vendorId}/products`;
-  const data = await callAPI('GET', path, { maxPerPage: 50, status: 'APPROVED' }, ak, sk);
-  const products = [];
-  for (const p of (data?.data || [])) {
-    for (const item of (p.vendorItems || [])) {
-      const opts = [item.optionName1, item.optionName2, item.optionName3].filter(Boolean);
-      products.push({
-        id: String(item.vendorItemId),
-        productId: String(p.sellerProductId),
-        name: p.sellerProductName || '상품명 없음',
-        option: opts.join(' / ') || '기본',
-        vendorItemId: String(item.vendorItemId),
-        coupangStock: 0,
-        warehouseStock: 0,
-        sales30: new Array(30).fill(0),
-        dailyAvg: 0,
-        coupangDepletionDays: 999,
-        totalDepletionDays: 999,
-        lastUpdated: new Date().toISOString(),
-      });
+// ─────────────────────────────────────────────
+// ✅ 상품 목록 조회 (sellerProductId 목록만 가져옴)
+// 공식문서: GET /marketplace/seller-products
+// ─────────────────────────────────────────────
+async function getSellerProductIds(accessKey, secretKey) {
+  const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
+  const allIds = [];
+  let nextToken = null;
+
+  for (let page = 0; page < 20; page++) {
+    const params = {
+      maxPerPage: 100,
+      status: 'APPROVED',
+      ...(nextToken ? { nextToken } : {}),
+    };
+
+    const data = await callAPI('GET', path, params, accessKey, secretKey);
+    const items = data?.data || [];
+
+    for (const item of items) {
+      if (item.sellerProductId) allIds.push(String(item.sellerProductId));
     }
+
+    nextToken = data?.nextToken || data?.data?.nextToken;
+    if (!nextToken || items.length === 0) break;
+    await new Promise(r => setTimeout(r, 200));
   }
+
+  return allIds;
+}
+
+// ─────────────────────────────────────────────
+// ✅ 개별 상품 조회로 vendorItemId 추출
+// 공식문서: GET /marketplace/seller-products/{sellerProductId}
+// 이 API에서 vendorItems(vendorItemId 포함) 반환
+// ─────────────────────────────────────────────
+async function getProductDetail(sellerProductId, accessKey, secretKey) {
+  const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/${sellerProductId}`;
+  const data = await callAPI('GET', path, null, accessKey, secretKey);
+  return data?.data;
+}
+
+// ─────────────────────────────────────────────
+// 상품 목록 전체 빌드 (목록 조회 + 개별 조회 조합)
+// ─────────────────────────────────────────────
+async function getProducts(accessKey, secretKey) {
+  const sellerProductIds = await getSellerProductIds(accessKey, secretKey);
+  console.log(`[상품목록] ${sellerProductIds.length}개 상품 발견`);
+
+  const products = [];
+
+  // 개별 상품 상세 조회 (3개씩 병렬)
+  for (let i = 0; i < sellerProductIds.length; i += 3) {
+    const batch = sellerProductIds.slice(i, i + 3);
+    const details = await Promise.all(
+      batch.map(id => getProductDetail(id, accessKey, secretKey).catch(e => {
+        console.error(`상품상세 실패(${id}):`, e.message);
+        return null;
+      }))
+    );
+
+    for (const product of details) {
+      if (!product) continue;
+      for (const item of (product.vendorItems || [])) {
+        const opts = [item.optionName1, item.optionName2, item.optionName3].filter(Boolean);
+        products.push({
+          id: String(item.vendorItemId),
+          productId: String(product.sellerProductId),
+          name: product.sellerProductName || '상품명 없음',
+          option: opts.join(' / ') || '기본',
+          vendorItemId: String(item.vendorItemId),
+          coupangStock: 0,
+          warehouseStock: 0,
+          sales30: new Array(30).fill(0),
+          dailyAvg: 0,
+          coupangDepletionDays: 999,
+          totalDepletionDays: 999,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (i + 3 < sellerProductIds.length) await new Promise(r => setTimeout(r, 300));
+  }
+
+  console.log(`[상품목록] 총 ${products.length}개 옵션(vendorItem) 추출 완료`);
   return products;
 }
 
-// 로켓그로스 재고: 상품 아이템별 수량/가격/상태 조회
-async function getRocketStock(vendorId, vendorItemId, ak, sk) {
-  const path = `/v2/providers/seller_api/apis/api/v1/vendor/${vendorId}/items/${vendorItemId}`;
-  const data = await callAPI('GET', path, null, ak, sk);
-  return data?.data?.quantity ?? 0;
+// ─────────────────────────────────────────────
+// ✅ 로켓그로스 재고 조회
+// 공식문서: GET /marketplace/vendor-items/{vendorItemId}/inventories
+// 응답 필드: data.amountInStock (quantity 아님!)
+// ─────────────────────────────────────────────
+async function getRocketStock(vendorItemId, accessKey, secretKey) {
+  const path = `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/inventories`;
+  const data = await callAPI('GET', path, null, accessKey, secretKey);
+
+  console.log(`[재고 ${vendorItemId}]`, JSON.stringify(data?.data));
+
+  // 공식문서 응답: { sellerItemId, amountInStock, salePrice, onSale }
+  return data?.data?.amountInStock ?? 0;
 }
 
-async function getSales30(vendorId, ak, sk) {
+// ─────────────────────────────────────────────
+// ✅ 최근 30일 판매량 조회 (v5 최신버전 사용)
+// 공식문서: GET /openapi/apis/api/v5/vendors/{vendorId}/ordersheets
+// ─────────────────────────────────────────────
+async function getSales30(vendorId, accessKey, secretKey) {
   const today = new Date();
   const from  = new Date(today);
   from.setDate(today.getDate() - 30);
 
-  const path = `/v2/providers/openapi/apis/api/v4/vendors/${vendorId}/ordersheets`;
+  // ✅ v5 최신 버전으로 업그레이드
+  const path = `/v2/providers/openapi/apis/api/v5/vendors/${vendorId}/ordersheets`;
   let orders = [], nextToken = null;
 
   for (let i = 0; i < 10; i++) {
@@ -120,12 +194,15 @@ async function getSales30(vendorId, ak, sk) {
       ...(nextToken ? { nextToken } : {}),
     };
     try {
-      const data = await callAPI('GET', path, params, ak, sk);
+      const data = await callAPI('GET', path, params, accessKey, secretKey);
       if (data?.data?.ordersheets) orders = orders.concat(data.data.ordersheets);
       nextToken = data?.data?.nextToken;
       if (!nextToken) break;
       await new Promise(r => setTimeout(r, 200));
-    } catch (e) { console.error('주문조회실패:', e.message); break; }
+    } catch (e) {
+      console.error('주문조회 실패:', e.message);
+      break;
+    }
   }
 
   const byItem = {};
@@ -135,14 +212,19 @@ async function getSales30(vendorId, ak, sk) {
       const daysAgo = Math.floor((today - new Date(order.orderedAt)) / 86400000);
       if (daysAgo < 0 || daysAgo >= 30) continue;
       if (!byItem[id]) byItem[id] = new Array(30).fill(0);
-      byItem[id][29 - daysAgo] += item.quantity || 1;
+      byItem[id][29 - daysAgo] += item.shippingCount || item.quantity || 1;
     }
   }
+
+  console.log(`[판매량] 주문 ${orders.length}건 처리 완료`);
   return byItem;
 }
 
 const depletion = (stock, avg) => (!avg || avg <= 0) ? 999 : Math.floor(stock / avg);
 
+// ─────────────────────────────────────────────
+// Netlify Function 진입점
+// ─────────────────────────────────────────────
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -167,10 +249,10 @@ export const handler = async (event) => {
 
     const { action, vendorItemId } = event.queryStringParameters || {};
 
-    // ── 연결 테스트
+    // ── 연결 테스트 (상품 목록 1개로 가장 단순하게 테스트)
     if (action === 'test') {
       try {
-        const path = `/v2/providers/seller_api/apis/api/v1/vendor/${vi}/products`;
+        const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
         await callAPI('GET', path, { maxPerPage: 1, status: 'APPROVED' }, ak, sk);
         return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: '쿠팡 API 연결 성공! ✅' }) };
       } catch (e) {
@@ -180,19 +262,20 @@ export const handler = async (event) => {
 
     // ── 상품 목록
     if (action === 'products') {
-      const products = await getProducts(vi, ak, sk);
+      const products = await getProducts(ak, sk);
       return { statusCode: 200, headers, body: JSON.stringify({ success: true, data: products }) };
     }
 
-    // ── 전체 동기화
+    // ── 전체 동기화 (재고 + 판매량)
     if (action === 'full_sync') {
-      const products  = await getProducts(vi, ak, sk);
+      const products  = await getProducts(ak, sk);
       const salesData = await getSales30(vi, ak, sk);
 
+      // 재고 조회 (5개씩 병렬)
       for (let i = 0; i < products.length; i += 5) {
         await Promise.all(products.slice(i, i + 5).map(async p => {
-          try   { p.coupangStock = await getRocketStock(vi, p.vendorItemId, ak, sk); }
-          catch (e) { p.coupangStock = 0; }
+          try   { p.coupangStock = await getRocketStock(p.vendorItemId, ak, sk); }
+          catch (e) { console.error(`재고실패(${p.vendorItemId}):`, e.message); p.coupangStock = 0; }
         }));
         if (i + 5 < products.length) await new Promise(r => setTimeout(r, 300));
       }
@@ -212,7 +295,7 @@ export const handler = async (event) => {
     // ── 단일 재고 조회
     if (action === 'inventory') {
       if (!vendorItemId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'vendorItemId 필요' }) };
-      const qty = await getRocketStock(vi, vendorItemId, ak, sk);
+      const qty = await getRocketStock(vendorItemId, ak, sk);
       return { statusCode: 200, headers, body: JSON.stringify({ success: true, vendorItemId, quantity: qty }) };
     }
 
