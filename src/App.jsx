@@ -48,8 +48,8 @@ function enrichProducts(rawProducts) {
 // API 호출 함수들
 // ──────────────────────────────────────────────
 const api = {
-  test: () => fetch('http://34.134.96.117:3000/api/coupang-proxy?action=test').then(r => r.json()),
-  fullSync: () => fetch('http://34.134.96.117:3000/api/coupang-proxy?action=full_sync').then(r => r.json()),
+  test: () => fetch('/api/coupang-proxy?action=test').then(r => r.json()),
+  fullSync: () => fetch('/api/coupang-proxy?action=full_sync').then(r => r.json()),
 };
 
 // ──────────────────────────────────────────────
