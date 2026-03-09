@@ -69,11 +69,10 @@ async function callAPI(method, path, params, accessKey, secretKey) {
   return JSON.parse(text);
 }
 
-// ✅ 공식문서 확인: 날짜+시간 형식 필수 "2020-02-19T10:43:30"
-// raw 값으로 그대로 전송 → 인코딩 불일치 없음
+// ✅ 쿠팡 API 확인된 형식: yyyy-MM-dd
 function formatDate(d) {
   const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
 // ─────────────────────────────────────────────
