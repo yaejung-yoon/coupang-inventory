@@ -80,7 +80,7 @@ async function getSellerProductIds(ak, sk, vi) {
   const allIds = [];
   let nextToken = null;
   for (let page = 0; page < 20; page++) {
-    const params = { maxPerPage: 100, status: 'APPROVED', ...(nextToken ? { nextToken } : {}) };
+    const params = { vendorId: vi, maxPerPage: 100, status: 'APPROVED', ...(nextToken ? { nextToken } : {}) };
     const data = await callAPI('GET', path, params, ak, sk);
     const items = data?.data || [];
     for (const item of items) {
