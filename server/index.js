@@ -75,7 +75,7 @@ function formatDate(d) {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
-async function getSellerProductIds(ak, sk) {
+async function getSellerProductIds(ak, sk, vi) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
   const allIds = [];
   let nextToken = null;
@@ -228,7 +228,7 @@ app.get('/api/coupang-proxy', async (req, res) => {
     }
 
     if (action === 'full_sync') {
-      const products  = await getProducts(ak, sk);
+      const products  = await getProducts(ak, sk, vi);
       const salesData = await getSales30(vi, ak, sk);
       for (let i = 0; i < products.length; i += 5) {
         await Promise.all(products.slice(i, i + 5).map(async p => {
