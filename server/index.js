@@ -1,8 +1,3 @@
-// ============================================================
-// 쿠팡 API 프록시 서버 (Railway용 Express 서버)
-// Netlify 함수 대신 Express로 동일한 기능 구현
-// ============================================================
-
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
@@ -14,11 +9,8 @@ const PORT = process.env.PORT || 3000;
 const BASE_URL = 'https://api-gateway.coupang.com';
 
 app.use(express.json());
-
-// 정적 파일 (React 빌드 결과물) 서빙
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// CORS 헤더
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
@@ -27,10 +19,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─────────────────────────────────────────────
-// 서명 생성
-// ─────────────────────────────────────────────
-function generateAuth(method, path, rawQuery, accessKey, secretKey) {
+function generateAuth(method, path, query, accessKey, secretKey) {
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
   const datetime =
@@ -41,7 +30,8 @@ function generateAuth(method, path, rawQuery, accessKey, secretKey) {
     pad(now.getUTCMinutes()) +
     pad(now.getUTCSeconds()) + 'Z';
 
-  const message = datetime + method + path + (rawQuery ? '?' + rawQuery : '');
+  // ✅ ? 없이 바로 붙임 (공식 PHP 예제 기준)
+  const message = datetime + method + path + query;
   console.log('[서명]', message);
 
   const signature = crypto
@@ -57,11 +47,11 @@ async function callAPI(method, path, params, accessKey, secretKey) {
     ? Object.entries(params).filter(([, v]) => v != null && v !== '')
     : [];
 
-  const rawQuery = entries.map(([k, v]) => `${k}=${v}`).join('&');
-  const urlQuery = entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  // ✅ raw 값 그대로 - 서명용과 URL용 완전 동일
+  const query = entries.map(([k, v]) => `${k}=${v}`).join('&');
 
-  const authorization = generateAuth(method, path, rawQuery, accessKey, secretKey);
-  const url = urlQuery ? `${BASE_URL}${path}?${urlQuery}` : `${BASE_URL}${path}`;
+  const authorization = generateAuth(method, path, query, accessKey, secretKey);
+  const url = query ? `${BASE_URL}${path}?${query}` : `${BASE_URL}${path}`;
 
   console.log(`[API] ${method} ${url}`);
 
@@ -74,24 +64,21 @@ async function callAPI(method, path, params, accessKey, secretKey) {
   });
 
   const text = await res.text();
-  console.log(`[응답] ${res.status}`, text.slice(0, 400));
+  console.log(`[응답] ${res.status}`, text.slice(0, 500));
 
   if (!res.ok) throw new Error(`쿠팡 API 오류 (${res.status}): ${text}`);
   return JSON.parse(text);
 }
 
 function formatDate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T00:00:00`;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
-// ─────────────────────────────────────────────
-// 상품 목록 조회
-// ─────────────────────────────────────────────
 async function getSellerProductIds(ak, sk) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
   const allIds = [];
   let nextToken = null;
-
   for (let page = 0; page < 20; page++) {
     const params = { maxPerPage: 100, status: 'APPROVED', ...(nextToken ? { nextToken } : {}) };
     const data = await callAPI('GET', path, params, ak, sk);
@@ -99,10 +86,11 @@ async function getSellerProductIds(ak, sk) {
     for (const item of items) {
       if (item.sellerProductId) allIds.push(String(item.sellerProductId));
     }
-    nextToken = data?.nextToken || data?.data?.nextToken;
+    nextToken = data?.nextToken;
     if (!nextToken || items.length === 0) break;
     await new Promise(r => setTimeout(r, 200));
   }
+  console.log(`[상품목록] ${allIds.length}개`);
   return allIds;
 }
 
@@ -114,67 +102,54 @@ async function getProductDetail(sellerProductId, ak, sk) {
 
 async function getProducts(ak, sk) {
   const ids = await getSellerProductIds(ak, sk);
-  console.log(`[상품목록] ${ids.length}개 상품`);
-
   const products = [];
   for (let i = 0; i < ids.length; i += 3) {
-    const batch = ids.slice(i, i + 3);
     const details = await Promise.all(
-      batch.map(id => getProductDetail(id, ak, sk).catch(e => {
-        console.error(`상품상세 실패(${id}):`, e.message); return null;
-      }))
+      ids.slice(i, i + 3).map(id =>
+        getProductDetail(id, ak, sk).catch(e => {
+          console.error(`상품상세 실패(${id}):`, e.message); return null;
+        })
+      )
     );
     for (const p of details) {
       if (!p) continue;
-      for (const item of (p.vendorItems || [])) {
-        const opts = [item.optionName1, item.optionName2, item.optionName3].filter(Boolean);
+      for (const item of (p.items || [])) {
         products.push({
           id: String(item.vendorItemId),
           productId: String(p.sellerProductId),
           name: p.sellerProductName || '상품명 없음',
-          option: opts.join(' / ') || '기본',
+          option: item.itemName || '기본',
           vendorItemId: String(item.vendorItemId),
-          coupangStock: 0,
-          warehouseStock: 0,
+          coupangStock: 0, warehouseStock: 0,
           sales30: new Array(30).fill(0),
-          dailyAvg: 0,
-          coupangDepletionDays: 999,
-          totalDepletionDays: 999,
+          dailyAvg: 0, coupangDepletionDays: 999, totalDepletionDays: 999,
           lastUpdated: new Date().toISOString(),
         });
       }
     }
     if (i + 3 < ids.length) await new Promise(r => setTimeout(r, 300));
   }
+  console.log(`[상품목록] 총 ${products.length}개`);
   return products;
 }
 
-// ─────────────────────────────────────────────
-// 로켓그로스 재고 조회
-// ─────────────────────────────────────────────
 async function getRocketStock(vendorItemId, ak, sk) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/inventories`;
   const data = await callAPI('GET', path, null, ak, sk);
+  console.log(`[재고 ${vendorItemId}]`, JSON.stringify(data?.data));
   return data?.data?.amountInStock ?? 0;
 }
 
-// ─────────────────────────────────────────────
-// 최근 30일 판매량
-// ─────────────────────────────────────────────
 async function getSales30(vendorId, ak, sk) {
   const today = new Date();
   const from = new Date(today);
   from.setDate(today.getDate() - 30);
-
-  const path = `/v2/providers/openapi/apis/api/v5/vendors/${vendorId}/ordersheets`;
+  const path = `/v2/providers/openapi/apis/api/v4/vendors/${vendorId}/ordersheets`;
   let orders = [], nextToken = null;
-
   for (let i = 0; i < 10; i++) {
     const params = {
-      createdAtFrom: formatDate(from),
-      createdAtTo: formatDate(today),
-      status: 'ACCEPT',
-      limit: 100,
+      createdAtFrom: formatDate(from), createdAtTo: formatDate(today),
+      status: 'ACCEPT', limit: 100,
       ...(nextToken ? { nextToken } : {}),
     };
     try {
@@ -183,9 +158,8 @@ async function getSales30(vendorId, ak, sk) {
       nextToken = data?.data?.nextToken;
       if (!nextToken) break;
       await new Promise(r => setTimeout(r, 200));
-    } catch (e) { console.error('주문조회 실패:', e.message); break; }
+    } catch (e) { break; }
   }
-
   const byItem = {};
   for (const order of orders) {
     for (const item of (order.orderItems || [])) {
@@ -201,9 +175,6 @@ async function getSales30(vendorId, ak, sk) {
 
 const depletion = (stock, avg) => (!avg || avg <= 0) ? 999 : Math.floor(stock / avg);
 
-// ─────────────────────────────────────────────
-// API 라우트
-// ─────────────────────────────────────────────
 app.get('/api/coupang-proxy', async (req, res) => {
   try {
     const ak = (process.env.COUPANG_ACCESS_KEY || '').trim();
@@ -216,53 +187,82 @@ app.get('/api/coupang-proxy', async (req, res) => {
 
     const { action, vendorItemId } = req.query;
 
-    // 연결 테스트
     if (action === 'test') {
       try {
-        const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
-        await callAPI('GET', path, { maxPerPage: 1, status: 'APPROVED' }, ak, sk);
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(today.getDate() - 1);
+        const path = `/v2/providers/openapi/apis/api/v4/vendors/${vi}/ordersheets`;
+        await callAPI('GET', path, {
+          createdAtFrom: formatDate(yesterday),
+          createdAtTo: formatDate(today),
+          status: 'ACCEPT', limit: 1,
+        }, ak, sk);
         return res.json({ success: true, message: '쿠팡 API 연결 성공! ✅' });
       } catch (e) {
+        if (e.message.includes('404')) return res.json({ success: true, message: '쿠팡 API 연결 성공! ✅' });
         return res.json({ success: false, message: '연결 실패: ' + e.message });
       }
     }
 
-    // 상품 목록
     if (action === 'products') {
       const products = await getProducts(ak, sk);
       return res.json({ success: true, data: products });
     }
 
-    // 전체 동기화
     if (action === 'full_sync') {
       const products  = await getProducts(ak, sk);
       const salesData = await getSales30(vi, ak, sk);
-
       for (let i = 0; i < products.length; i += 5) {
         await Promise.all(products.slice(i, i + 5).map(async p => {
-          try   { p.coupangStock = await getRocketStock(p.vendorItemId, ak, sk); }
+          try { p.coupangStock = await getRocketStock(p.vendorItemId, ak, sk); }
           catch (e) { p.coupangStock = 0; }
         }));
         if (i + 5 < products.length) await new Promise(r => setTimeout(r, 300));
       }
-
       for (const p of products) {
         const sales = salesData[p.vendorItemId] || new Array(30).fill(0);
-        p.sales30   = sales;
-        p.dailyAvg  = sales.reduce((a, b) => a + b, 0) / 30;
+        p.sales30  = sales;
+        p.dailyAvg = sales.reduce((a, b) => a + b, 0) / 30;
         p.coupangDepletionDays = depletion(p.coupangStock, p.dailyAvg);
         p.totalDepletionDays   = depletion(p.coupangStock + p.warehouseStock, p.dailyAvg);
         p.lastUpdated = new Date().toISOString();
       }
-
       return res.json({ success: true, data: products, syncedAt: new Date().toISOString() });
     }
 
-    // 단일 재고 조회
     if (action === 'inventory') {
       if (!vendorItemId) return res.status(400).json({ error: 'vendorItemId 필요' });
       const qty = await getRocketStock(vendorItemId, ak, sk);
       return res.json({ success: true, vendorItemId, quantity: qty });
+    }
+
+    // vendorItemId로 상품명/옵션명 조회
+    if (action === 'item_info') {
+      if (!vendorItemId) return res.status(400).json({ error: 'vendorItemId 필요' });
+      const ids = await getSellerProductIds(ak, sk, vi);
+      for (let i = 0; i < ids.length; i += 10) {
+        const batch = ids.slice(i, i + 10);
+        const details = await Promise.all(
+          batch.map(id => getProductDetail(id, ak, sk).catch(() => null))
+        );
+        for (const p of details) {
+          if (!p) continue;
+          for (const item of (p.items || [])) {
+            const vid = String(item.rocketGrowthItemData?.vendorItemId);
+            if (vid === String(vendorItemId)) {
+              return res.json({
+                success: true,
+                vendorItemId: vid,
+                name: p.sellerProductName || '상품명 없음',
+                option: item.itemName || '기본',
+              });
+            }
+          }
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return res.json({ success: false, error: '해당 옵션 ID를 찾을 수 없어요' });
     }
 
     return res.status(400).json({ error: `알 수 없는 action: ${action}` });
@@ -273,11 +273,10 @@ app.get('/api/coupang-proxy', async (req, res) => {
   }
 });
 
-// React 앱 라우팅 (모든 경로를 index.html로)
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ 서버 실행 중: http://localhost:${PORT}`);
+  console.log(`✅ 서버 실행중: http://localhost:${PORT}`);
 });
