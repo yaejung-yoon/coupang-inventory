@@ -30,7 +30,6 @@ function generateAuth(method, path, query, accessKey, secretKey) {
     pad(now.getUTCMinutes()) +
     pad(now.getUTCSeconds()) + 'Z';
 
-  // ✅ ? 없이 바로 붙임 (공식 PHP 예제 기준)
   const message = datetime + method + path + query;
   console.log('[서명]', message);
 
@@ -47,9 +46,7 @@ async function callAPI(method, path, params, accessKey, secretKey) {
     ? Object.entries(params).filter(([, v]) => v != null && v !== '')
     : [];
 
-  // ✅ raw 값 그대로 - 서명용과 URL용 완전 동일
   const query = entries.map(([k, v]) => `${k}=${v}`).join('&');
-
   const authorization = generateAuth(method, path, query, accessKey, secretKey);
   const url = query ? `${BASE_URL}${path}?${query}` : `${BASE_URL}${path}`;
 
@@ -75,12 +72,18 @@ function formatDate(d) {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
-async function getSellerProductIds(ak, sk) {
+// vendorId 필수 파라미터로 상품 ID 목록 조회
+async function getSellerProductIds(ak, sk, vi) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`;
   const allIds = [];
   let nextToken = null;
   for (let page = 0; page < 20; page++) {
-    const params = { maxPerPage: 100, status: 'APPROVED', ...(nextToken ? { nextToken } : {}) };
+    const params = {
+      vendorId: vi,
+      maxPerPage: 100,
+      status: 'APPROVED',
+      ...(nextToken ? { nextToken } : {}),
+    };
     const data = await callAPI('GET', path, params, ak, sk);
     const items = data?.data || [];
     for (const item of items) {
@@ -120,9 +123,12 @@ async function getProducts(ak, sk, vi) {
           name: p.sellerProductName || '상품명 없음',
           option: item.itemName || '기본',
           vendorItemId: String(item.rocketGrowthItemData?.vendorItemId || item.vendorItemId),
-          coupangStock: 0, warehouseStock: 0,
+          coupangStock: 0,
+          warehouseStock: 0,
           sales30: new Array(30).fill(0),
-          dailyAvg: 0, coupangDepletionDays: 999, totalDepletionDays: 999,
+          dailyAvg: 0,
+          coupangDepletionDays: 999,
+          totalDepletionDays: 999,
           lastUpdated: new Date().toISOString(),
         });
       }
@@ -136,7 +142,6 @@ async function getProducts(ak, sk, vi) {
 async function getRocketStock(vendorItemId, ak, sk) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/inventories`;
   const data = await callAPI('GET', path, null, ak, sk);
-  console.log(`[재고 ${vendorItemId}]`, JSON.stringify(data?.data));
   return data?.data?.amountInStock ?? 0;
 }
 
@@ -148,8 +153,10 @@ async function getSales30(vendorId, ak, sk) {
   let orders = [], nextToken = null;
   for (let i = 0; i < 10; i++) {
     const params = {
-      createdAtFrom: formatDate(from), createdAtTo: formatDate(today),
-      status: 'ACCEPT', limit: 100,
+      createdAtFrom: formatDate(from),
+      createdAtTo: formatDate(today),
+      status: 'ACCEPT',
+      limit: 100,
       ...(nextToken ? { nextToken } : {}),
     };
     try {
@@ -187,6 +194,7 @@ app.get('/api/coupang-proxy', async (req, res) => {
 
     const { action, vendorItemId } = req.query;
 
+    // 연결 테스트
     if (action === 'test') {
       try {
         const today = new Date();
@@ -205,19 +213,19 @@ app.get('/api/coupang-proxy', async (req, res) => {
       }
     }
 
-    if (action === 'products') {
+    // 상품 목록만 조회 (상품 관리 탭용)
+    if (action === 'products' || action === 'list_all') {
       const products = await getProducts(ak, sk, vi);
       return res.json({ success: true, data: products });
     }
 
-    // 상품 관리용: 재고/판매 없이 목록만 빠르게
-    if (action === 'list_all') {
-      const products = await getProducts(ak, sk, vi);
-      return res.json({ success: true, data: products });
-    }
-
+    // 전체 동기화 (enabledIds로 필터링 가능)
     if (action === 'full_sync') {
-      const products  = await getProducts(ak, sk);
+      const enabledIds = req.query.enabledIds ? req.query.enabledIds.split(',') : null;
+      let products = await getProducts(ak, sk, vi);
+      if (enabledIds && enabledIds.length > 0) {
+        products = products.filter(p => enabledIds.includes(p.vendorItemId));
+      }
       const salesData = await getSales30(vi, ak, sk);
       for (let i = 0; i < products.length; i += 5) {
         await Promise.all(products.slice(i, i + 5).map(async p => {
@@ -237,13 +245,14 @@ app.get('/api/coupang-proxy', async (req, res) => {
       return res.json({ success: true, data: products, syncedAt: new Date().toISOString() });
     }
 
+    // 단일 재고 조회
     if (action === 'inventory') {
       if (!vendorItemId) return res.status(400).json({ error: 'vendorItemId 필요' });
       const qty = await getRocketStock(vendorItemId, ak, sk);
       return res.json({ success: true, vendorItemId, quantity: qty });
     }
 
-    // vendorItemId로 상품명/옵션명 조회
+    // vendorItemId로 상품명/옵션명 자동조회
     if (action === 'item_info') {
       if (!vendorItemId) return res.status(400).json({ error: 'vendorItemId 필요' });
       const ids = await getSellerProductIds(ak, sk, vi);
