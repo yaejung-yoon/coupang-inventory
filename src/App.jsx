@@ -50,6 +50,7 @@ function enrichProducts(rawProducts) {
 const api = {
   test: () => fetch('/api/coupang-proxy?action=test').then(r => r.json()),
   fullSync: () => fetch('/api/coupang-proxy?action=full_sync').then(r => r.json()),
+  addItem: (vendorItemId) => fetch(`/api/coupang-proxy?action=inventory&vendorItemId=${vendorItemId}`).then(r => r.json()),
 };
 
 // ──────────────────────────────────────────────
@@ -93,6 +94,12 @@ export default function App() {
   const [warehouseData, setWarehouseData] = useState({});
   const [autoSyncInterval, setAutoSyncInterval] = useState(null);
   const intervalRef = useRef(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newItemId, setNewItemId] = useState('');
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemOption, setNewItemOption] = useState('');
+  const [addLoading, setAddLoading] = useState(false);
+  const [addError, setAddError] = useState('');
 
   // API 연결 테스트
   const testConnection = async () => {
@@ -155,6 +162,47 @@ export default function App() {
     }
   };
 
+  // 상품 삭제
+  const deleteProduct = (productId) => {
+    if (!window.confirm('이 상품을 목록에서 삭제할까요?')) return;
+    setProducts(prev => prev.filter(p => p.id !== productId));
+  };
+
+  // 상품 추가 (vendorItemId로)
+  const addProductById = async () => {
+    const vid = newItemId.trim();
+    if (!vid) { setAddError('옵션 ID를 입력해주세요'); return; }
+    setAddLoading(true);
+    setAddError('');
+    try {
+      const result = await api.addItem(vid);
+      if (!result.success) { setAddError('조회 실패: ' + result.error); return; }
+      const exists = products.find(p => p.vendorItemId === vid);
+      if (exists) { setAddError('이미 목록에 있는 옵션 ID예요'); return; }
+      const newProduct = enrichProducts([{
+        id: vid,
+        productId: vid,
+        name: newItemName || `상품 (${vid})`,
+        option: newItemOption || '기본',
+        vendorItemId: vid,
+        coupangStock: result.quantity || 0,
+        warehouseStock: 0,
+        sales30: new Array(30).fill(0),
+        dailyAvg: 0,
+        coupangDepletionDays: 999,
+        totalDepletionDays: 999,
+        lastUpdated: new Date().toISOString(),
+      }])[0];
+      setProducts(prev => [...prev, newProduct]);
+      setShowAddModal(false);
+      setNewItemId(''); setNewItemName(''); setNewItemOption('');
+    } catch (e) {
+      setAddError('오류: ' + e.message);
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
   // 창고 재고 수정
   const saveWarehouseStock = (productId, vendorItemId) => {
     const val = parseInt(warehouseEdits[productId]);
@@ -194,6 +242,54 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: "'Noto Sans KR', sans-serif", background: '#0F1923', minHeight: '100vh', color: '#E8EDF2' }}>
+
+      {/* ─── 상품 추가 모달 ─── */}
+      {showAddModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#141F2E', border: '1px solid #1E3A5F', borderRadius: 16, padding: 28, width: 420, maxWidth: '90vw' }}>
+            <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 20, color: '#E2E8F0' }}>➕ 상품 직접 추가</div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: '#64829B', fontWeight: 600, marginBottom: 6 }}>옵션 ID (Vendor Item ID) <span style={{ color: '#EF4444' }}>*필수</span></div>
+              <input value={newItemId} onChange={e => setNewItemId(e.target.value)}
+                placeholder="예: 91221573088"
+                style={{ width: '100%', background: '#0D1520', border: '1px solid #1E3A5F', borderRadius: 8, padding: '10px 14px', color: '#E2E8F0', fontSize: 14, fontFamily: 'Noto Sans KR', boxSizing: 'border-box' }} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: '#64829B', fontWeight: 600, marginBottom: 6 }}>상품명 (선택)</div>
+              <input value={newItemName} onChange={e => setNewItemName(e.target.value)}
+                placeholder="예: 머치온탑 캣타워"
+                style={{ width: '100%', background: '#0D1520', border: '1px solid #1E3A5F', borderRadius: 8, padding: '10px 14px', color: '#E2E8F0', fontSize: 14, fontFamily: 'Noto Sans KR', boxSizing: 'border-box' }} />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 12, color: '#64829B', fontWeight: 600, marginBottom: 6 }}>옵션명 (선택)</div>
+              <input value={newItemOption} onChange={e => setNewItemOption(e.target.value)}
+                placeholder="예: XL 브라운"
+                style={{ width: '100%', background: '#0D1520', border: '1px solid #1E3A5F', borderRadius: 8, padding: '10px 14px', color: '#E2E8F0', fontSize: 14, fontFamily: 'Noto Sans KR', boxSizing: 'border-box' }} />
+            </div>
+
+            {addError && <div style={{ color: '#EF4444', fontSize: 13, marginBottom: 14, background: '#2D1515', padding: '8px 12px', borderRadius: 8 }}>{addError}</div>}
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={addProductById} disabled={addLoading}
+                style={{ flex: 1, background: addLoading ? '#1E3A5F' : 'linear-gradient(135deg, #10B981, #059669)', color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontWeight: 700, fontSize: 14, cursor: addLoading ? 'not-allowed' : 'pointer', fontFamily: 'Noto Sans KR' }}>
+                {addLoading ? '⏳ 조회 중...' : '✅ 추가하기'}
+              </button>
+              <button onClick={() => { setShowAddModal(false); setNewItemId(''); setNewItemName(''); setNewItemOption(''); setAddError(''); }}
+                style={{ background: '#1E3A5F', color: '#94A3B8', border: 'none', borderRadius: 8, padding: '11px 20px', fontWeight: 600, fontSize: 14, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                취소
+              </button>
+            </div>
+
+            <div style={{ marginTop: 14, fontSize: 12, color: '#64829B', lineHeight: 1.8 }}>
+              💡 옵션 ID는 쿠팡 WING → 로켓그로스 → 상품 상세에서 확인하거나,<br/>
+              동기화 후 <b style={{ color: '#60A5FA' }}>쿠팡 창고 재고 탭</b>의 Vendor Item ID 열에서 복사하세요.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── HEADER ─── */}
       <div style={{ background: 'linear-gradient(180deg, #0A1420 0%, #0F1923 100%)', borderBottom: '1px solid #1E3A5F' }}>
@@ -303,12 +399,18 @@ export default function App() {
 
             {/* 전체 현황 테이블 */}
             <Card>
-              <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F', fontWeight: 700, fontSize: 15 }}>📋 전체 재고 현황</div>
+              <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>📋 전체 재고 현황</span>
+                <button onClick={() => { setShowAddModal(true); setAddError(''); }}
+                  style={{ background: '#0D2E1A', color: '#34D399', border: '1px solid #34D399', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                  ＋ 상품 추가
+                </button>
+              </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ background: '#0D1520' }}>
-                      {['상품명', '옵션', '일평균 판매', '쿠팡 재고', '쿠팡 소진', '창고 재고', '합산 소진', '상태', '차트'].map(h => (
+                      {['상품명', '옵션', '일평균 판매', '쿠팡 재고', '쿠팡 소진', '창고 재고', '합산 소진', '상태', '차트', ''].map(h => (
                         <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: '#64829B', fontWeight: 600, whiteSpace: 'nowrap', borderBottom: '1px solid #1E3A5F' }}>{h}</th>
                       ))}
                     </tr>
@@ -332,6 +434,12 @@ export default function App() {
                           <button onClick={() => setSelectedProduct(selectedProduct?.id === p.id ? null : p)}
                             style={{ background: '#1E3A5F', color: '#60A5FA', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
                             {selectedProduct?.id === p.id ? '닫기' : '📈 보기'}
+                          </button>
+                        </td>
+                        <td style={{ padding: '11px 14px' }}>
+                          <button onClick={() => deleteProduct(p.id)}
+                            style={{ background: '#2D1515', color: '#EF4444', border: '1px solid #EF4444', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                            🗑️
                           </button>
                         </td>
                       </tr>
