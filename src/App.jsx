@@ -52,6 +52,8 @@ const api = {
   fullSync: () => fetch('/api/coupang-proxy?action=full_sync').then(r => r.json()),
   addItem: (vendorItemId) => fetch(`/api/coupang-proxy?action=inventory&vendorItemId=${vendorItemId}`).then(r => r.json()),
   itemInfo: (vendorItemId) => fetch(`/api/coupang-proxy?action=item_info&vendorItemId=${vendorItemId}`).then(r => r.json()),
+  listAll: () => fetch('/api/coupang-proxy?action=list_all').then(r => r.json()),
+  fullSyncFiltered: (enabledIds) => fetch(`/api/coupang-proxy?action=full_sync&enabledIds=${enabledIds.join(',')}`).then(r => r.json()),
 };
 
 // ──────────────────────────────────────────────
@@ -102,6 +104,12 @@ export default function App() {
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState('');
   const [infoLoading, setInfoLoading] = useState(false);
+  const [allProducts, setAllProducts] = useState([]); // 상품 관리용 전체 목록
+  const [enabledIds, setEnabledIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('enabledIds') || 'null') || []); }
+    catch { return new Set(); }
+  });
+  const [listLoading, setListLoading] = useState(false);
 
   const lookupItemInfo = async (vid) => {
     if (!vid || vid.length < 5) return;
@@ -149,7 +157,8 @@ export default function App() {
     setLoading(true);
     setSyncStatus('쿠팡 API에서 데이터 가져오는 중...');
     try {
-      const result = await api.fullSync();
+      const ids = enabledIds.size > 0 ? [...enabledIds] : null;
+      const result = ids ? await api.fullSyncFiltered(ids) : await api.fullSync();
       if (result.success) {
         // API 데이터에 창고 재고 병합
         const merged = result.data.map(p => ({
@@ -369,6 +378,7 @@ export default function App() {
             <TabBtn id="coupang" label="🏭 쿠팡 창고 재고" />
             <TabBtn id="warehouse" label="📦 자체 창고 재고" />
             <TabBtn id="restock" label="🚨 발주 가이드" />
+            <TabBtn id="manage" label="⚙️ 상품 관리" />
             <TabBtn id="guide" label="📖 설치 가이드" />
           </div>
         </div>
@@ -622,6 +632,115 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════
+            TAB: 상품 관리
+        ══════════════════════════════════ */}
+        {tab === 'manage' && (
+          <div>
+            <Card style={{ marginBottom: 16 }}>
+              <div style={{ padding: '18px 22px', borderBottom: '1px solid #1E3A5F', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: '#E2E8F0' }}>⚙️ 상품 관리</div>
+                  <div style={{ fontSize: 12, color: '#64829B', marginTop: 3 }}>ON인 상품만 대시보드에 표시됩니다. 변경 후 동기화 버튼을 눌러주세요.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  {enabledIds.size > 0 && (
+                    <span style={{ fontSize: 12, color: '#34D399', background: '#0D2E1A', padding: '4px 12px', borderRadius: 20, fontWeight: 700 }}>
+                      {enabledIds.size}개 선택됨
+                    </span>
+                  )}
+                  <button onClick={async () => {
+                    setListLoading(true);
+                    try {
+                      const result = await api.listAll();
+                      if (result.success) {
+                        // 상품명 기준으로 그룹핑해서 중복 표시
+                        setAllProducts(result.data);
+                        // 처음 불러올 때 아무것도 선택 안 됐으면 전체 선택
+                        if (enabledIds.size === 0) {
+                          const all = new Set(result.data.map(p => p.vendorItemId));
+                          setEnabledIds(all);
+                          localStorage.setItem('enabledIds', JSON.stringify([...all]));
+                        }
+                      }
+                    } catch(e) { alert('불러오기 실패: ' + e.message); }
+                    finally { setListLoading(false); }
+                  }} disabled={listLoading}
+                    style={{ background: listLoading ? '#1E3A5F' : 'linear-gradient(135deg, #3B82F6, #2563EB)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 13, cursor: listLoading ? 'not-allowed' : 'pointer', fontFamily: 'Noto Sans KR' }}>
+                    {listLoading ? '⏳ 불러오는 중...' : '🔄 전체 목록 불러오기'}
+                  </button>
+                  {allProducts.length > 0 && (
+                    <button onClick={() => {
+                      const all = new Set(allProducts.map(p => p.vendorItemId));
+                      setEnabledIds(all);
+                      localStorage.setItem('enabledIds', JSON.stringify([...all]));
+                    }} style={{ background: '#0D2E1A', color: '#34D399', border: '1px solid #34D399', borderRadius: 8, padding: '8px 14px', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                      전체 ON
+                    </button>
+                  )}
+                  {allProducts.length > 0 && (
+                    <button onClick={() => {
+                      setEnabledIds(new Set());
+                      localStorage.setItem('enabledIds', JSON.stringify([]));
+                    }} style={{ background: '#2D1515', color: '#EF4444', border: '1px solid #EF4444', borderRadius: 8, padding: '8px 14px', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                      전체 OFF
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {allProducts.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#64829B', fontSize: 14 }}>
+                  위의 "전체 목록 불러오기" 버튼을 눌러주세요 (1~2분 소요)
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#0D1520' }}>
+                        {['표시', '상품명', '옵션', 'Vendor Item ID'].map(h => (
+                          <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: '#64829B', fontWeight: 600, borderBottom: '1px solid #1E3A5F', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allProducts.map((p, i) => {
+                        const isOn = enabledIds.has(p.vendorItemId);
+                        return (
+                          <tr key={p.id} style={{ borderBottom: '1px solid #131D2A', background: i % 2 === 0 ? 'transparent' : '#0A1018', opacity: isOn ? 1 : 0.4 }}>
+                            <td style={{ padding: '10px 14px' }}>
+                              <div onClick={() => {
+                                const next = new Set(enabledIds);
+                                if (isOn) next.delete(p.vendorItemId);
+                                else next.add(p.vendorItemId);
+                                setEnabledIds(next);
+                                localStorage.setItem('enabledIds', JSON.stringify([...next]));
+                              }} style={{
+                                width: 42, height: 24, borderRadius: 12, cursor: 'pointer', position: 'relative',
+                                background: isOn ? '#10B981' : '#1E3A5F', transition: 'background 0.2s',
+                                border: `1px solid ${isOn ? '#10B981' : '#2D4F6F'}`
+                              }}>
+                                <div style={{
+                                  position: 'absolute', top: 3, left: isOn ? 20 : 3,
+                                  width: 16, height: 16, borderRadius: '50%', background: '#fff',
+                                  transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+                                }} />
+                              </div>
+                            </td>
+                            <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 700, color: '#C8D8E8' }}>{p.name}</td>
+                            <td style={{ padding: '10px 14px', fontSize: 12, color: '#94A3B8' }}>{p.option}</td>
+                            <td style={{ padding: '10px 14px', fontSize: 11, color: '#64829B', fontFamily: 'monospace' }}>{p.vendorItemId}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </Card>
           </div>
         )}
