@@ -173,11 +173,11 @@ export default function App() {
         setSyncStatus('❌ 동기화 실패: ' + (result.error || '알 수 없는 오류'));
       }
     } catch (e) {
-      setSyncStatus('❌ 오류: ' + e.message + ' (Netlify 환경변수 설정 확인 필요)');
+      setSyncStatus('❌ 오류: ' + e.message);
     } finally {
       setLoading(false);
     }
-  }, [warehouseData]);
+  }, [warehouseData, enabledIds]);
 
   // 자동 동기화 (5분마다)
   const toggleAutoSync = () => {
