@@ -51,6 +51,7 @@ const api = {
   test: () => fetch('/api/coupang-proxy?action=test').then(r => r.json()),
   fullSync: () => fetch('/api/coupang-proxy?action=full_sync').then(r => r.json()),
   addItem: (vendorItemId) => fetch(`/api/coupang-proxy?action=inventory&vendorItemId=${vendorItemId}`).then(r => r.json()),
+  itemInfo: (vendorItemId) => fetch(`/api/coupang-proxy?action=item_info&vendorItemId=${vendorItemId}`).then(r => r.json()),
 };
 
 // ──────────────────────────────────────────────
@@ -100,6 +101,26 @@ export default function App() {
   const [newItemOption, setNewItemOption] = useState('');
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState('');
+  const [infoLoading, setInfoLoading] = useState(false);
+
+  const lookupItemInfo = async (vid) => {
+    if (!vid || vid.length < 5) return;
+    setInfoLoading(true);
+    setAddError('');
+    try {
+      const result = await api.itemInfo(vid.trim());
+      if (result.success) {
+        setNewItemName(result.name);
+        setNewItemOption(result.option);
+      } else {
+        setAddError('자동조회 실패: ' + (result.error || '옵션 ID를 확인해주세요'));
+      }
+    } catch (e) {
+      setAddError('조회 오류: ' + e.message);
+    } finally {
+      setInfoLoading(false);
+    }
+  };
 
   // API 연결 테스트
   const testConnection = async () => {
@@ -251,9 +272,15 @@ export default function App() {
 
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: '#64829B', fontWeight: 600, marginBottom: 6 }}>옵션 ID (Vendor Item ID) <span style={{ color: '#EF4444' }}>*필수</span></div>
-              <input value={newItemId} onChange={e => setNewItemId(e.target.value)}
-                placeholder="예: 91221573088"
-                style={{ width: '100%', background: '#0D1520', border: '1px solid #1E3A5F', borderRadius: 8, padding: '10px 14px', color: '#E2E8F0', fontSize: 14, fontFamily: 'Noto Sans KR', boxSizing: 'border-box' }} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={newItemId} onChange={e => setNewItemId(e.target.value)}
+                  placeholder="예: 91221573088"
+                  style={{ flex: 1, background: '#0D1520', border: '1px solid #1E3A5F', borderRadius: 8, padding: '10px 14px', color: '#E2E8F0', fontSize: 14, fontFamily: 'Noto Sans KR', boxSizing: 'border-box' }} />
+                <button onClick={() => lookupItemInfo(newItemId)} disabled={infoLoading || !newItemId}
+                  style={{ background: infoLoading ? '#1E3A5F' : '#1E3A5F', color: '#60A5FA', border: '1px solid #3B82F6', borderRadius: 8, padding: '10px 14px', fontSize: 12, fontWeight: 700, cursor: infoLoading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap', fontFamily: 'Noto Sans KR' }}>
+                  {infoLoading ? '⏳' : '🔍 자동조회'}
+                </button>
+              </div>
             </div>
 
             <div style={{ marginBottom: 14 }}>
