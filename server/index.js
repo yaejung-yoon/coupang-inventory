@@ -100,8 +100,8 @@ async function getProductDetail(sellerProductId, ak, sk) {
   return data?.data;
 }
 
-async function getProducts(ak, sk) {
-  const ids = await getSellerProductIds(ak, sk);
+async function getProducts(ak, sk, vi) {
+  const ids = await getSellerProductIds(ak, sk, vi);
   const products = [];
   for (let i = 0; i < ids.length; i += 3) {
     const details = await Promise.all(
@@ -115,11 +115,11 @@ async function getProducts(ak, sk) {
       if (!p) continue;
       for (const item of (p.items || [])) {
         products.push({
-          id: String(item.vendorItemId),
+          id: String(item.rocketGrowthItemData?.vendorItemId || item.vendorItemId),
           productId: String(p.sellerProductId),
           name: p.sellerProductName || '상품명 없음',
           option: item.itemName || '기본',
-          vendorItemId: String(item.vendorItemId),
+          vendorItemId: String(item.rocketGrowthItemData?.vendorItemId || item.vendorItemId),
           coupangStock: 0, warehouseStock: 0,
           sales30: new Array(30).fill(0),
           dailyAvg: 0, coupangDepletionDays: 999, totalDepletionDays: 999,
@@ -206,7 +206,13 @@ app.get('/api/coupang-proxy', async (req, res) => {
     }
 
     if (action === 'products') {
-      const products = await getProducts(ak, sk);
+      const products = await getProducts(ak, sk, vi);
+      return res.json({ success: true, data: products });
+    }
+
+    // 상품 관리용: 재고/판매 없이 목록만 빠르게
+    if (action === 'list_all') {
+      const products = await getProducts(ak, sk, vi);
       return res.json({ success: true, data: products });
     }
 
