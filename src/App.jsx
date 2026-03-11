@@ -49,11 +49,11 @@ function enrichProducts(rawProducts) {
 // ──────────────────────────────────────────────
 const api = {
   test: () => fetch('/api/coupang-proxy?action=test').then(r => r.json()),
-  fullSync: () => fetch('/api/coupang-proxy?action=full_sync').then(r => r.json()),
+  fullSync: (period) => fetch(`/api/coupang-proxy?action=full_sync&period=${period}`).then(r => r.json()),
   addItem: (vendorItemId) => fetch(`/api/coupang-proxy?action=inventory&vendorItemId=${vendorItemId}`).then(r => r.json()),
   itemInfo: (vendorItemId) => fetch(`/api/coupang-proxy?action=item_info&vendorItemId=${vendorItemId}`).then(r => r.json()),
   listAll: () => fetch('/api/coupang-proxy?action=list_all').then(r => r.json()),
-  fullSyncFiltered: (enabledIds) => fetch(`/api/coupang-proxy?action=full_sync&enabledIds=${enabledIds.join(',')}`).then(r => r.json()),
+  fullSyncFiltered: (enabledIds, period) => fetch(`/api/coupang-proxy?action=full_sync&enabledIds=${enabledIds.join(',')}&period=${period}`).then(r => r.json()),
 };
 
 // ──────────────────────────────────────────────
@@ -110,6 +110,7 @@ export default function App() {
     catch { return new Set(); }
   });
   const [listLoading, setListLoading] = useState(false);
+  const [salesPeriod, setSalesPeriod] = useState(30); // 7 or 30
 
   const lookupItemInfo = async (vid) => {
     if (!vid || vid.length < 5) return;
@@ -158,7 +159,7 @@ export default function App() {
     setSyncStatus('쿠팡 API에서 데이터 가져오는 중...');
     try {
       const ids = enabledIds.size > 0 ? [...enabledIds] : null;
-      const result = ids ? await api.fullSyncFiltered(ids) : await api.fullSync();
+      const result = ids ? await api.fullSyncFiltered(ids, salesPeriod) : await api.fullSync(salesPeriod);
       if (result.success) {
         // API 데이터에 창고 재고 병합
         const merged = result.data.map(p => ({
@@ -177,7 +178,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [warehouseData, enabledIds]);
+  }, [warehouseData, enabledIds, salesPeriod]);
 
   // 자동 동기화 (5분마다)
   const toggleAutoSync = () => {
@@ -345,6 +346,19 @@ export default function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {lastSync && <span style={{ fontSize: 12, color: '#64829B' }}>동기화: {lastSync.toLocaleTimeString('ko-KR')}</span>}
               {syncStatus && <span style={{ fontSize: 12, color: syncStatus.startsWith('✅') ? '#34D399' : syncStatus.startsWith('❌') ? '#EF4444' : '#FBBF24' }}>{syncStatus}</span>}
+
+              {/* 판매 기간 토글 */}
+              <div style={{ display: 'flex', background: '#0A1420', border: '1px solid #1E3A5F', borderRadius: 8, overflow: 'hidden' }}>
+                {[7, 30].map(p => (
+                  <button key={p} onClick={() => setSalesPeriod(p)} style={{
+                    background: salesPeriod === p ? 'linear-gradient(135deg, #1E3A5F, #2D4F6F)' : 'transparent',
+                    color: salesPeriod === p ? '#60A5FA' : '#64829B',
+                    border: 'none', padding: '7px 14px', fontWeight: 700, fontSize: 12,
+                    cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif',
+                    transition: 'all 0.15s'
+                  }}>{p}일 기준</button>
+                ))}
+              </div>
 
               <button onClick={fullSync} disabled={loading} style={{
                 background: loading ? '#1E3A5F' : 'linear-gradient(135deg, #E4412A, #FF6B4A)',
@@ -519,7 +533,7 @@ export default function App() {
               <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>🏭 쿠팡 로켓그로스 창고 재고</div>
-                  <div style={{ fontSize: 12, color: '#64829B', marginTop: 2 }}>API 실시간 연동 · 최근 30일 판매 기준 소진일 계산</div>
+                  <div style={{ fontSize: 12, color: '#64829B', marginTop: 2 }}>API 실시간 연동 · 최근 {salesPeriod}일 판매 기준 소진일 계산</div>
                 </div>
                 <span style={{ fontSize: 12, background: isDemo ? '#1E3A5F' : '#0D2E1A', color: isDemo ? '#60A5FA' : '#34D399', padding: '4px 14px', borderRadius: 20, fontWeight: 700 }}>
                   {isDemo ? '📋 데모 데이터' : '🟢 실시간 API'}
@@ -566,7 +580,7 @@ export default function App() {
             <Card style={{ padding: '16px 22px' }}>
               <div style={{ fontWeight: 700, color: '#60A5FA', marginBottom: 8, fontSize: 13 }}>📌 계산 공식</div>
               <div style={{ fontSize: 13, color: '#94A3B8', lineHeight: 2 }}>
-                <b style={{ color: '#E2E8F0' }}>소진 예상일</b> = 현재 쿠팡 재고 ÷ 일평균 판매량 (최근 30일 합계 ÷ 30)<br />
+                <b style={{ color: '#E2E8F0' }}>소진 예상일</b> = 현재 쿠팡 재고 ÷ 일평균 판매량 (최근 {salesPeriod}일 합계 ÷ {salesPeriod})<br />
                 <b style={{ color: '#FBBF24' }}>입고 권장 수량</b> = (일평균 × 50일) − 현재 쿠팡 재고 → 소진 예상 15~20일 이하일 때 표시
               </div>
             </Card>
