@@ -134,6 +134,48 @@ async function getProducts(ak, sk, vi) {
   return products;
 }
 
+// 로켓그로스 주문 API로 최근 7일 판매량 집계
+async function getRGOrders7Days(ak, sk, vi) {
+  const today = new Date();
+  const toDate = new Date(today);
+  toDate.setDate(today.getDate() - 1); // 전일까지
+  const fromDate = new Date(today);
+  fromDate.setDate(today.getDate() - 7); // 7일 전부터
+
+  const pad = n => String(n).padStart(2, '0');
+  const fmt = d => `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
+
+  const apiPath = `/v2/providers/rg_open_api/apis/api/v1/vendors/${vi}/rg/orders`;
+  const result = {}; // { vendorItemId: totalQty }
+  let nextToken = null;
+
+  for (let page = 0; page < 50; page++) {
+    const params = {
+      paidDateFrom: fmt(fromDate),
+      paidDateTo: fmt(toDate),
+      ...(nextToken ? { nextToken } : {}),
+    };
+    try {
+      const data = await callAPI('GET', apiPath, params, ak, sk);
+      const orders = data?.data || [];
+      for (const order of orders) {
+        for (const item of (order.orderItems || [])) {
+          const id = String(item.vendorItemId || '');
+          if (!id || id === '0') continue;
+          result[id] = (result[id] || 0) + (item.salesQuantity || 1);
+        }
+      }
+      nextToken = data?.nextToken;
+      if (!nextToken || orders.length === 0) break;
+      await new Promise(r => setTimeout(r, 200));
+    } catch (e) {
+      console.error('[7일 판매량 오류]', e.message); break;
+    }
+  }
+  console.log(`[7일 판매량] 집계된 옵션 수: ${Object.keys(result).length}개`);
+  return result;
+}
+
 // 로켓창고 재고 + 30일 판매량 통합 조회
 async function getRGInventorySummaries(ak, sk, vi) {
   const apiPath = `/v2/providers/rg_open_api/apis/api/v1/vendors/${vi}/rg/inventory/summaries`;
@@ -256,19 +298,29 @@ app.get('/api/coupang-proxy', async (req, res) => {
 
     if (action === 'full_sync') {
       const enabledIds = req.query.enabledIds ? req.query.enabledIds.split(',') : null;
+      const period = req.query.period === '7' ? 7 : 30;
       let products = await getProducts(ak, sk, vi);
       if (enabledIds && enabledIds.length > 0) {
         products = products.filter(p => enabledIds.includes(p.vendorItemId));
       }
       // 로켓창고 API로 재고 + 30일 판매량 한번에 조회
       const rgData = await getRGInventorySummaries(ak, sk, vi);
+      let sales7Data = {};
+      if (period === 7) {
+        sales7Data = await getRGOrders7Days(ak, sk, vi);
+      }
       for (const p of products) {
         const d = rgData[p.vendorItemId] || { stock: 0, sales30total: 0 };
         p.coupangStock = d.stock;
-        // 30일 판매량을 균등 분배 (일별 배열로 변환)
-        const dailyAvg = d.sales30total / 30;
-        p.sales30  = new Array(30).fill(Math.round(dailyAvg * 10) / 10);
-        p.dailyAvg = dailyAvg;
+        if (period === 7) {
+          const total7 = sales7Data[p.vendorItemId] || 0;
+          p.dailyAvg = total7 / 7;
+          p.sales30  = new Array(30).fill(Math.round(p.dailyAvg * 10) / 10);
+        } else {
+          p.dailyAvg = d.sales30total / 30;
+          p.sales30  = new Array(30).fill(Math.round(p.dailyAvg * 10) / 10);
+        }
+        p.salesPeriod = period;
         p.coupangDepletionDays = depletion(p.coupangStock, p.dailyAvg);
         p.totalDepletionDays   = depletion(p.coupangStock + p.warehouseStock, p.dailyAvg);
         p.lastUpdated = new Date().toISOString();
