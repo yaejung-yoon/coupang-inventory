@@ -159,7 +159,8 @@ async function getSales30(vendorId, ak, sk) {
                   : Array.isArray(data?.data?.ordersheets) ? data.data.ordersheets
                   : [];
       if (batch.length > 0) {
-        if (i === 0) console.log('[주문샘플]', JSON.stringify(batch[0]).slice(0, 600));
+  
+        if (i === 0) console.log('[주문샘플전체]', JSON.stringify(batch[0]));
         orders = orders.concat(batch);
       }
       nextToken = data?.data?.nextToken || data?.nextToken;
@@ -168,12 +169,20 @@ async function getSales30(vendorId, ak, sk) {
     } catch (e) { console.error('[판매량 조회 오류]', e.message); break; }
   }
   console.log(`[판매량] 총 ${orders.length}개 주문`);
+  // 첫 번째 주문의 orderItem 전체를 파일에 저장
+  if (orders.length > 0) {
+    const firstOrder = orders[0];
+    const firstItems = firstOrder.orderItems || firstOrder.items || [];
+    const fs = await import('fs');
+    fs.writeFileSync('/home/yaejung_yoon/orderitem_debug.json', JSON.stringify(firstItems, null, 2));
+    console.log('[디버그] orderItem 파일 저장 완료, 아이템 수:', firstItems.length);
+  }
   const byItem = {};
   for (const order of orders) {
     const items = order.orderItems || order.items || [];
     for (const item of items) {
-      const id = String(item.vendorItemId);
-      if (!id || id === 'undefined') continue;
+      const id = String(item.vendorItemId || item.vendorItemPackageId || item.sellerItemId || '');
+      if (!id || id === 'undefined' || id === '0' || id === '') continue;
       const daysAgo = Math.floor((today - new Date(order.orderedAt)) / 86400000);
       if (daysAgo < 0 || daysAgo >= 30) continue;
       if (!byItem[id]) byItem[id] = new Array(30).fill(0);
