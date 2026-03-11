@@ -134,6 +134,31 @@ async function getProducts(ak, sk, vi) {
   return products;
 }
 
+// 로켓창고 재고 + 30일 판매량 통합 조회
+async function getRGInventorySummaries(ak, sk, vi) {
+  const apiPath = `/v2/providers/rg_open_api/apis/api/v1/vendors/${vi}/rg/inventory/summaries`;
+  const result = {}; // { vendorItemId: { stock, sales30total } }
+  let nextToken = null;
+
+  for (let page = 0; page < 50; page++) {
+    const params = { ...(nextToken ? { nextToken } : {}) };
+    const data = await callAPI('GET', apiPath, Object.keys(params).length ? params : null, ak, sk);
+    const items = data?.data || [];
+    for (const item of items) {
+      const vid = String(item.vendorItemId);
+      result[vid] = {
+        stock: item.inventoryDetails?.totalOrderableQuantity ?? 0,
+        sales30total: item.salesCountMap?.SALES_COUNT_LAST_THIRTY_DAYS ?? 0,
+      };
+    }
+    nextToken = data?.nextToken;
+    if (!nextToken || items.length === 0) break;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  console.log(`[재고+판매량] 총 ${Object.keys(result).length}개 옵션`);
+  return result;
+}
+
 async function getRocketStock(vendorItemId, ak, sk) {
   const path = `/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/${vendorItemId}/inventories`;
   const data = await callAPI('GET', path, null, ak, sk);
@@ -235,19 +260,15 @@ app.get('/api/coupang-proxy', async (req, res) => {
       if (enabledIds && enabledIds.length > 0) {
         products = products.filter(p => enabledIds.includes(p.vendorItemId));
       }
-      const salesData = await getSales30(vi, ak, sk);
-      for (let i = 0; i < products.length; i += 5) {
-        await Promise.all(products.slice(i, i + 5).map(async p => {
-          try { p.coupangStock = await getRocketStock(p.vendorItemId, ak, sk); }
-          catch (e) { p.coupangStock = 0; }
-        }));
-        if (i + 5 < products.length) await new Promise(r => setTimeout(r, 300));
-      }
+      // 로켓창고 API로 재고 + 30일 판매량 한번에 조회
+      const rgData = await getRGInventorySummaries(ak, sk, vi);
       for (const p of products) {
-        // rocketGrowth ID와 marketplace ID 둘 다 시도
-        const sales = salesData[p.vendorItemId] || salesData[p.marketplaceVendorItemId] || new Array(30).fill(0);
-        p.sales30  = sales;
-        p.dailyAvg = sales.reduce((a, b) => a + b, 0) / 30;
+        const d = rgData[p.vendorItemId] || { stock: 0, sales30total: 0 };
+        p.coupangStock = d.stock;
+        // 30일 판매량을 균등 분배 (일별 배열로 변환)
+        const dailyAvg = d.sales30total / 30;
+        p.sales30  = new Array(30).fill(Math.round(dailyAvg * 10) / 10);
+        p.dailyAvg = dailyAvg;
         p.coupangDepletionDays = depletion(p.coupangStock, p.dailyAvg);
         p.totalDepletionDays   = depletion(p.coupangStock + p.warehouseStock, p.dailyAvg);
         p.lastUpdated = new Date().toISOString();
