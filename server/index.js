@@ -228,7 +228,11 @@ app.get('/api/coupang-proxy', async (req, res) => {
     }
 
     if (action === 'full_sync') {
-      const products  = await getProducts(ak, sk, vi);
+      const enabledIds = req.query.enabledIds ? req.query.enabledIds.split(',') : null;
+      let products = await getProducts(ak, sk, vi);
+      if (enabledIds && enabledIds.length > 0) {
+        products = products.filter(p => enabledIds.includes(p.vendorItemId));
+      }
       const salesData = await getSales30(vi, ak, sk);
       for (let i = 0; i < products.length; i += 5) {
         await Promise.all(products.slice(i, i + 5).map(async p => {
