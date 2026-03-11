@@ -1028,7 +1028,7 @@ export default function App() {
                 </div>
               </Card>
             ))}
-
+            
             <Card style={{ padding: '18px 22px', border: '1px solid #F59E0B', background: 'linear-gradient(135deg, #1A1200, #2D2000)' }}>
               <div style={{ fontWeight: 700, color: '#FBBF24', fontSize: 14, marginBottom: 8 }}>💡 자주 묻는 질문</div>
               {[
