@@ -1,5 +1,33 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import * as XLSX from 'xlsx';
+
+// ──────────────────────────────────────────────
+// 엑셀 내보내기 유틸리티
+// ──────────────────────────────────────────────
+function exportToExcel(sheetData, filename) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+  // 컬럼 너비 자동 설정
+  const colWidths = sheetData[0].map((_, ci) =>
+    Math.max(...sheetData.map(row => String(row[ci] ?? '').length)) + 4
+  );
+  ws['!cols'] = colWidths.map(w => ({ wch: Math.min(w, 40) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, filename);
+}
+
+function ExportBtn({ onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      background: '#0D2E1A', color: '#34D399', border: '1px solid #34D399',
+      borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700,
+      cursor: 'pointer', fontFamily: 'Noto Sans KR', display: 'flex', alignItems: 'center', gap: 6
+    }}>
+      📥 엑셀 다운로드
+    </button>
+  );
+}
 
 // ──────────────────────────────────────────────
 // 계산 유틸리티
@@ -452,10 +480,22 @@ export default function App() {
             <Card>
               <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, fontSize: 15 }}>📋 전체 재고 현황</span>
-                <button onClick={() => { setShowAddModal(true); setAddError(''); }}
-                  style={{ background: '#0D2E1A', color: '#34D399', border: '1px solid #34D399', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
-                  ＋ 상품 추가
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <ExportBtn onClick={() => {
+                    const rows = [['상품명','옵션','일평균 판매(개/일)','쿠팡 재고','쿠팡 소진(일)','창고 재고','합산 소진(일)','상태']];
+                    products.forEach(p => rows.push([
+                      p.name, p.option, +p.dailyAvg.toFixed(1),
+                      p.coupangStock, p.coupangDepletionDays >= 999 ? '∞' : p.coupangDepletionDays,
+                      p.warehouseStock, p.totalDepletionDays >= 999 ? '∞' : p.totalDepletionDays,
+                      getStatus(p.coupangDepletionDays).label.replace(/[^\w가-힣 ]/g, '').trim()
+                    ]));
+                    exportToExcel(rows, `대시보드_${new Date().toISOString().slice(0,10)}.xlsx`);
+                  }} />
+                  <button onClick={() => { setShowAddModal(true); setAddError(''); }}
+                    style={{ background: '#0D2E1A', color: '#34D399', border: '1px solid #34D399', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR' }}>
+                    ＋ 상품 추가
+                  </button>
+                </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -535,9 +575,27 @@ export default function App() {
                   <div style={{ fontWeight: 700, fontSize: 15 }}>🏭 쿠팡 로켓그로스 창고 재고</div>
                   <div style={{ fontSize: 12, color: '#64829B', marginTop: 2 }}>API 실시간 연동 · 최근 {salesPeriod}일 판매 기준 소진일 계산</div>
                 </div>
-                <span style={{ fontSize: 12, background: isDemo ? '#1E3A5F' : '#0D2E1A', color: isDemo ? '#60A5FA' : '#34D399', padding: '4px 14px', borderRadius: 20, fontWeight: 700 }}>
-                  {isDemo ? '📋 데모 데이터' : '🟢 실시간 API'}
-                </span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <ExportBtn onClick={() => {
+                    const rows = [['상품명','옵션','Vendor Item ID','쿠팡 재고','일평균(개/일)','7일 판매','14일 판매','30일 판매','소진 예상(일)',`50일 입고권장`]];
+                    products.forEach(p => {
+                      const last7 = p.sales30.slice(-7).reduce((a,b)=>a+b,0);
+                      const last14 = p.sales30.slice(-14).reduce((a,b)=>a+b,0);
+                      const last30 = p.sales30.reduce((a,b)=>a+b,0);
+                      const restock = calcRestockQty(p.dailyAvg, p.coupangStock, 50);
+                      rows.push([
+                        p.name, p.option, p.vendorItemId, p.coupangStock,
+                        +p.dailyAvg.toFixed(1), last7, last14, last30,
+                        p.coupangDepletionDays >= 999 ? '∞' : p.coupangDepletionDays,
+                        p.coupangDepletionDays <= 20 ? restock : '-'
+                      ]);
+                    });
+                    exportToExcel(rows, `쿠팡창고재고_${new Date().toISOString().slice(0,10)}.xlsx`);
+                  }} />
+                  <span style={{ fontSize: 12, background: isDemo ? '#1E3A5F' : '#0D2E1A', color: isDemo ? '#60A5FA' : '#34D399', padding: '4px 14px', borderRadius: 20, fontWeight: 700 }}>
+                    {isDemo ? '📋 데모 데이터' : '🟢 실시간 API'}
+                  </span>
+                </div>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -593,9 +651,23 @@ export default function App() {
         {tab === 'warehouse' && (
           <div>
             <Card style={{ marginBottom: 16 }}>
-              <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F' }}>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>📦 자체 창고 재고 관리</div>
-                <div style={{ fontSize: 12, color: '#64829B', marginTop: 2 }}>숫자를 클릭해서 직접 수정하세요. 합산 재고는 즉시 반영됩니다.</div>
+              <div style={{ padding: '16px 22px', borderBottom: '1px solid #1E3A5F', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>📦 자체 창고 재고 관리</div>
+                  <div style={{ fontSize: 12, color: '#64829B', marginTop: 2 }}>숫자를 클릭해서 직접 수정하세요. 합산 재고는 즉시 반영됩니다.</div>
+                </div>
+                <ExportBtn onClick={() => {
+                  const rows = [['상품명','옵션','쿠팡 창고(개)','자체 창고(개)','합산 재고(개)','합산 소진(일)','상태']];
+                  products.forEach(p => {
+                    const total = p.coupangStock + p.warehouseStock;
+                    rows.push([
+                      p.name, p.option, p.coupangStock, p.warehouseStock, total,
+                      p.totalDepletionDays >= 999 ? '∞' : p.totalDepletionDays,
+                      getStatus(p.totalDepletionDays).label.replace(/[^\w가-힣 ]/g, '').trim()
+                    ]);
+                  });
+                  exportToExcel(rows, `자체창고재고_${new Date().toISOString().slice(0,10)}.xlsx`);
+                }} />
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -764,7 +836,31 @@ export default function App() {
         ══════════════════════════════════ */}
         {tab === 'restock' && (
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 800, color: '#E4412A', marginBottom: 16 }}>🏭 쿠팡 입고 가이드 — 소진 20일 이하 옵션</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 800, color: '#E4412A', margin: 0 }}>🏭 쿠팡 입고 가이드 — 소진 20일 이하 옵션</h2>
+              <ExportBtn onClick={() => {
+                const rows = [['구분','상품명','옵션','Vendor Item ID','쿠팡 재고','일평균(개/일)','쿠팡 소진(일)','입고 권장(개)','합산 재고','합산 소진(일)','구매 권장(개)']];
+                // 쿠팡 입고 대상
+                urgent.forEach(p => {
+                  const restock = calcRestockQty(p.dailyAvg, p.coupangStock, 50);
+                  rows.push(['🚨 쿠팡입고', p.name, p.option, p.vendorItemId,
+                    p.coupangStock, +p.dailyAvg.toFixed(1),
+                    p.coupangDepletionDays >= 999 ? '∞' : p.coupangDepletionDays,
+                    restock, '-', '-', '-'
+                  ]);
+                });
+                // 신규 구매 대상
+                purchaseNeeded.forEach(p => {
+                  const total = p.coupangStock + p.warehouseStock;
+                  const buyQty = calcRestockQty(p.dailyAvg, total, 120);
+                  rows.push(['🛒 신규구매', p.name, p.option, p.vendorItemId,
+                    p.coupangStock, +p.dailyAvg.toFixed(1), '-', '-',
+                    total, p.totalDepletionDays >= 999 ? '∞' : p.totalDepletionDays, buyQty
+                  ]);
+                });
+                exportToExcel(rows, `발주가이드_${new Date().toISOString().slice(0,10)}.xlsx`);
+              }} />
+            </div>
 
             {urgent.length === 0
               ? <Card style={{ padding: '20px 24px', marginBottom: 24, border: '1px solid #16A34A', background: '#0D2E1A' }}><span style={{ color: '#34D399', fontWeight: 700 }}>✅ 현재 긴급 입고가 필요한 옵션이 없습니다.</span></Card>
