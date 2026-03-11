@@ -120,6 +120,7 @@ async function getProducts(ak, sk, vi) {
           name: p.sellerProductName || '상품명 없음',
           option: item.itemName || '기본',
           vendorItemId: String(item.rocketGrowthItemData?.vendorItemId || item.vendorItemId),
+          marketplaceVendorItemId: String(item.marketplaceItemData?.vendorItemId || ''),
           coupangStock: 0, warehouseStock: 0,
           sales30: new Array(30).fill(0),
           dailyAvg: 0, coupangDepletionDays: 999, totalDepletionDays: 999,
@@ -243,7 +244,8 @@ app.get('/api/coupang-proxy', async (req, res) => {
         if (i + 5 < products.length) await new Promise(r => setTimeout(r, 300));
       }
       for (const p of products) {
-        const sales = salesData[p.vendorItemId] || new Array(30).fill(0);
+        // rocketGrowth ID와 marketplace ID 둘 다 시도
+        const sales = salesData[p.vendorItemId] || salesData[p.marketplaceVendorItemId] || new Array(30).fill(0);
         p.sales30  = sales;
         p.dailyAvg = sales.reduce((a, b) => a + b, 0) / 30;
         p.coupangDepletionDays = depletion(p.coupangStock, p.dailyAvg);
